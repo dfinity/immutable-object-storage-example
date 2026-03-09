@@ -1,0 +1,20 @@
+{
+  "canisters": {
+    "example_frontend": {
+      "type": "assets",
+      "source": ["dist"],
+      "dependencies": ["example_backend"]
+    },
+    "example_backend": {
+      "type": "custom",
+      "candid": "../rust-backend/src/example_backend.did",
+      "wasm": "../rust-backend/.dfx/local/canisters/example_backend/example_backend.wasm",
+      "remote": {
+        "id": {
+          "ic": "REPLACE_WITH_YOUR_CANISTER_ID"
+        }
+      }
+    }
+  },
+  "version": 1
+}

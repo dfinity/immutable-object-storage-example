@@ -1,0 +1,10 @@
+{
+  "canisters": {
+    "example_backend": {
+      "type": "rust",
+      "package": "example-backend",
+      "candid": "src/example_backend.did"
+    }
+  },
+  "version": 1
+}

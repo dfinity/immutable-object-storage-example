@@ -1,0 +1,20 @@
+# PocketIC binary (downloaded by scripts/run_tests.py)
+.tools/
+
+# Rust
+**/target/
+
+# DFX / canister build
+**/.dfx/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# MOPS
+motoko-backend/.mops
+
+# Env (may contain secrets)
+.env
+.env.local
+.env.*.local

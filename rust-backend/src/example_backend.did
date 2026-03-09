@@ -1,0 +1,21 @@
+// Candid interface for the example-backend canister.
+
+type BlobInfo = record {
+  hash : text;
+  name : text;
+  size : nat64;
+  content_type : text;
+  created_at : nat64;
+};
+type CreateCertificateResult = record { method : text; blob_hash : text };
+service : () -> {
+  _immutableObjectStorageBlobIsLive : (blob) -> (bool) query;
+  _immutableObjectStorageBlobsToDelete : () -> (vec text) query;
+  _immutableObjectStorageConfirmBlobDeletion : (vec blob) -> ();
+  _immutableObjectStorageCreateCertificate : (text) -> (CreateCertificateResult);
+  _immutableObjectStorageUpdateGatewayPrincipals : () -> ();
+  add_gateway_principal : (principal) -> ();
+  delete_blob : (text) -> ();
+  list_blobs : () -> (vec BlobInfo) query;
+  set_blob_info : (text, text, nat64, text) -> ();
+}
