@@ -340,10 +340,10 @@ icfs cashier payment-account audit-log | grep <CANISTER_ID>
 
 Set up alerts on these Prometheus metrics exposed by the Cashier:
 
-| Metric                                                      | Alert when…           |
-|-------------------------------------------------------------|-----------------------|
-| `account_balance{account="<principal>"}`                    | `< 5T`                |
-| `auto_topup_skipped_total{reason="insufficient_payment_account"}` | increases       |
+| Metric                                                            | Alert when…           |
+|-------------------------------------------------------------------|-----------------------|
+| `ic_cashier_payment_account_balance{owner="<principal>"}`         | `< 5T`                |
+| `ic_cashier_auto_topup_skipped_insufficient_balance_total`        | increases             |
 
 ---
 
