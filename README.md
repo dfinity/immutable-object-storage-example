@@ -143,8 +143,11 @@ Manual alternative (not recommended): see [docs/automation-options.md](docs/auto
 `icfs` is the Caffeine CLI for managing your storage account and uploading files.
 
 ```bash
-cargo install --git https://github.com/caffeinelabs/object-storage icfs
+curl -L https://caffeinelabs.github.io/object-storage/artifacts/icfs/latest/icfs-linux-x86_64 -o icfs
+chmod +x ./icfs
 ```
+
+Move the icfs binary to some directory that is in your PATH, e.g. `$HOME/bin` or `/usr/local/bin`
 
 Verify:
 

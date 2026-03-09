@@ -101,13 +101,7 @@ success "Prerequisites OK"
 echo ""
 info "Installing icfs CLI..."
 
-if command -v icfs &>/dev/null; then
-    CURRENT_VERSION=$(icfs --version 2>/dev/null | head -1 || echo "unknown")
-    warn "icfs already installed ($CURRENT_VERSION). Re-installing to ensure latest version."
-fi
-
-cargo install --git https://github.com/caffeinelabs/object-storage icfs \
-    || error "Failed to install icfs. Check your internet connection and Rust toolchain."
+curl -L https://caffeinelabs.github.io/object-storage/artifacts/icfs/latest/icfs-linux-x86_64 -o $HOME/.cargo/bin/icfs
 
 success "icfs installed: $(icfs --version 2>/dev/null | head -1)"
 
@@ -124,7 +118,7 @@ missing=()
 
 if [[ ${#missing[@]} -gt 0 ]]; then
     error "Missing required environment variables: ${missing[*]}
-    
+
     Set them in your shell or create a .env file and run: source .env
     See README.md Step 2 for details."
 fi
