@@ -17,7 +17,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    // Vite needs to pre-bundle these ESM packages.
-    include: ["@dfinity/agent", "@dfinity/candid", "@dfinity/principal"],
+    include: ["@icp-sdk/core"],
   },
 });

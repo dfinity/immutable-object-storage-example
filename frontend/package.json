@@ -9,9 +9,7 @@
     "generate": "dfx generate example_backend"
   },
   "dependencies": {
-    "@dfinity/agent": "^3.4.3",
-    "@dfinity/candid": "^3.4.3",
-    "@dfinity/principal": "^3.4.3",
+    "@icp-sdk/core": "^5.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  backend,
-  CANISTER_ID,
-  GATEWAY_URL,
-  sha256File,
-  type BlobInfo,
-} from "./canister";
+import { backend, CANISTER_ID, GATEWAY_URL, storageClient, type BlobInfo } from "./canister";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,61 +25,44 @@ function formatDate(nanos: bigint): string {
   return new Date(Number(nanos / 1_000_000n)).toLocaleString();
 }
 
-function blobDownloadUrl(canisterId: string, hash: string): string {
-  // The gateway serves blobs at /blob/<owner>/<hash>
-  return `${GATEWAY_URL}/blob/${canisterId}/${hash}`;
-}
-
 // ── Upload logic ──────────────────────────────────────────────────────────────
 
 async function uploadFile(
   file: File,
-  onProgress: (state: UploadState) => void
+  onProgress: (state: UploadState) => void,
 ): Promise<void> {
   if (!CANISTER_ID) {
     throw new Error(
       "VITE_CANISTER_ID is not set. " +
-        "Set it in frontend/.env or deploy the backend first (dfx deploy)."
+        "Set it in frontend/.env or deploy the backend first (dfx deploy).",
     );
   }
 
-  // Step 1: compute SHA-256 hash
-  onProgress({ status: "hashing", message: "Computing SHA-256 hash…", progress: 10 });
-  const hash = await sha256File(file);
+  onProgress({ status: "hashing", message: "Chunking and hashing file…", progress: 10 });
 
-  // Step 2: create upload certificate on the canister
-  onProgress({ status: "certifying", message: "Creating upload certificate…", progress: 25 });
-  const cert = await backend._immutableObjectStorageCreateCertificate(hash);
+  const fileBytes = new Uint8Array(await file.arrayBuffer());
 
-  if (cert.method !== "upload" || cert.blob_hash !== hash) {
-    throw new Error(`Unexpected certificate: ${JSON.stringify(cert)}`);
-  }
+  onProgress({ status: "uploading", message: "Uploading to storage gateway…", progress: 20 });
 
-  // Step 3: upload to the storage gateway
-  onProgress({ status: "uploading", message: "Uploading to storage gateway…", progress: 40 });
-  const uploadUrl = blobDownloadUrl(CANISTER_ID, hash);
-
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${encodeURIComponent(file.name)}"`,
+  const { hash } = await storageClient.putFile(
+    fileBytes,
+    file.type || "application/octet-stream",
+    (chunkProgress) => {
+      const overall = 20 + Math.round(chunkProgress * 0.6);
+      onProgress({
+        status: "uploading",
+        message: `Uploading chunks… ${chunkProgress}%`,
+        progress: overall,
+      });
     },
-    body: file,
-  });
+  );
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(`Gateway upload failed (${response.status}): ${text}`);
-  }
-
-  // Step 4: save display metadata on-chain
   onProgress({ status: "saving", message: "Saving file metadata…", progress: 85 });
   await backend.set_blob_info(
     hash,
     file.name,
     BigInt(file.size),
-    file.type || "application/octet-stream"
+    file.type || "application/octet-stream",
   );
 
   onProgress({ status: "done", message: "Upload complete!", progress: 100 });
@@ -111,13 +88,16 @@ function DropZone({
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) onFiles(files);
     },
-    [disabled, onFiles]
+    [disabled, onFiles],
   );
 
   return (
     <div
       className={`drop-zone ${dragging ? "drop-zone--active" : ""} ${disabled ? "drop-zone--disabled" : ""}`}
-      onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true); }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!disabled) setDragging(true);
+      }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
       onClick={() => !disabled && inputRef.current?.click()}
@@ -133,12 +113,12 @@ function DropZone({
           e.target.value = "";
         }}
       />
-      <span className="drop-zone__icon">☁</span>
+      <span className="drop-zone__icon">&#9729;</span>
       <p className="drop-zone__label">
         {disabled ? "Uploading…" : "Drop files here or click to select"}
       </p>
       <p className="drop-zone__hint">
-        Files are content-addressed — the SHA-256 hash is stored on-chain.
+        Files are content-addressed — the SHA-256 merkle root is stored on-chain.
       </p>
     </div>
   );
@@ -158,7 +138,9 @@ function UploadProgress({ state }: { state: UploadState }) {
           style={{ width: `${state.progress}%`, transition: "width 0.3s ease" }}
         />
       </div>
-      <p className={`upload-progress__message ${isDone ? "upload-progress__message--done" : ""}`}>
+      <p
+        className={`upload-progress__message ${isDone ? "upload-progress__message--done" : ""}`}
+      >
         {state.message}
       </p>
     </div>
@@ -167,15 +149,13 @@ function UploadProgress({ state }: { state: UploadState }) {
 
 function BlobCard({
   blob,
-  canisterId,
   onDelete,
 }: {
   blob: BlobInfo;
-  canisterId: string;
   onDelete: (hash: string) => void;
 }) {
   const [deleting, setDeleting] = useState(false);
-  const downloadUrl = blobDownloadUrl(canisterId, blob.hash);
+  const downloadUrl = storageClient.getDownloadURL(blob.hash);
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${blob.name || blob.hash}"? This cannot be undone.`)) return;
@@ -200,7 +180,9 @@ function BlobCard({
           {blob.content_type && <span>{blob.content_type} · </span>}
           {formatBytes(blob.size)} · {formatDate(blob.created_at)}
         </p>
-        <p className="blob-card__hash" title={blob.hash}>{blob.hash}</p>
+        <p className="blob-card__hash" title={blob.hash}>
+          {blob.hash}
+        </p>
       </div>
       <div className="blob-card__actions">
         <a
@@ -212,11 +194,7 @@ function BlobCard({
         >
           Download
         </a>
-        <button
-          className="btn btn--danger"
-          onClick={handleDelete}
-          disabled={deleting}
-        >
+        <button className="btn btn--danger" onClick={handleDelete} disabled={deleting}>
           {deleting ? "Deleting…" : "Delete"}
         </button>
       </div>
@@ -239,7 +217,11 @@ export default function App() {
   const [blobs, setBlobs] = useState<BlobInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [upload, setUpload] = useState<UploadState>({ status: "idle", message: "", progress: 0 });
+  const [upload, setUpload] = useState<UploadState>({
+    status: "idle",
+    message: "",
+    progress: 0,
+  });
 
   const loadBlobs = useCallback(async () => {
     setLoadError(null);
@@ -253,40 +235,41 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { loadBlobs(); }, [loadBlobs]);
-
-  const handleFiles = useCallback(async (files: File[]) => {
-    for (const file of files) {
-      setUpload({ status: "hashing", message: `Processing ${file.name}…`, progress: 5 });
-      try {
-        await uploadFile(file, setUpload);
-        // Refresh the blob list after each successful upload.
-        await loadBlobs();
-      } catch (e) {
-        setUpload({ status: "error", message: `Upload failed: ${e}`, progress: 0 });
-        return;
-      }
-    }
-    setTimeout(() => setUpload({ status: "idle", message: "", progress: 0 }), 3000);
+  useEffect(() => {
+    loadBlobs();
   }, [loadBlobs]);
+
+  const handleFiles = useCallback(
+    async (files: File[]) => {
+      for (const file of files) {
+        setUpload({ status: "hashing", message: `Processing ${file.name}…`, progress: 5 });
+        try {
+          await uploadFile(file, setUpload);
+          await loadBlobs();
+        } catch (e) {
+          setUpload({ status: "error", message: `Upload failed: ${e}`, progress: 0 });
+          return;
+        }
+      }
+      setTimeout(() => setUpload({ status: "idle", message: "", progress: 0 }), 3000);
+    },
+    [loadBlobs],
+  );
 
   const handleDelete = useCallback((hash: string) => {
     setBlobs((prev) => prev.filter((b) => b.hash !== hash));
   }, []);
 
-  const isUploading = upload.status !== "idle" && upload.status !== "done" && upload.status !== "error";
+  const isUploading =
+    upload.status !== "idle" && upload.status !== "done" && upload.status !== "error";
 
   return (
     <div className="app">
       <header className="header">
-        <h1 className="header__title">
-          ☁ Caffeine Object Storage
-        </h1>
+        <h1 className="header__title">&#9729; Caffeine Object Storage</h1>
         <p className="header__sub">
           Immutable, content-addressed file storage on the Internet Computer.{" "}
-          {CANISTER_ID && (
-            <span className="header__canister">Canister: {CANISTER_ID}</span>
-          )}
+          {CANISTER_ID && <span className="header__canister">Canister: {CANISTER_ID}</span>}
         </p>
       </header>
 
@@ -321,12 +304,7 @@ export default function App() {
 
           <div className="blob-list">
             {blobs.map((blob) => (
-              <BlobCard
-                key={blob.hash}
-                blob={blob}
-                canisterId={CANISTER_ID}
-                onDelete={handleDelete}
-              />
+              <BlobCard key={blob.hash} blob={blob} onDelete={handleDelete} />
             ))}
           </div>
         </section>
@@ -334,9 +312,9 @@ export default function App() {
 
       <footer className="footer">
         <p>
-          Files are stored at{" "}
+          Files are stored via{" "}
           <a href={GATEWAY_URL} target="_blank" rel="noopener noreferrer">
-            {GATEWAY_URL}
+            {GATEWAY_URL || "blob.caffeine.ai"}
           </a>
           . Hashes are anchored on-chain via the{" "}
           <a
