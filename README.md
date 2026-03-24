@@ -17,41 +17,325 @@ verifying every upload against that hash.
 - Payment in ICP cycles via the Cycles Ledger. No separate accounts or tokens required.
 - No vendor lock-in on the data format: SHA-256 hashes are a universal standard.
 
-### Architecture
+---
+
+## Architecture
+
+There are four components in the system. As an integrator, you deploy and manage the
+**Backend Canister**. The other three are operated by Caffeine.
 
 ```
-                  ┌──────────────────────────────────────────┐
-                  │          Internet Computer               │
-                  │                                          │
-                  │  ┌──────────────┐  ┌──────────────────┐  │
- User/Browser ───►│  │ Your Backend │  │ Cashier Canister │  │
-       │          │  │   Canister   │  │  (billing/auth)  │  │
-       │          │  └──────────────┘  └──────────────────┘  │
-       │          └──────────────────────────────────────────┘
-       │
-       │ PUT/GET blob
-       ▼
-  ┌─────────────────────────────────┐
-  │  Storage Gateway            │
-  │  blob.caffeine.ai           │
-  │  (verifies hash & balance)  │
-  └────────────────┬────────────┘
-                   │ stores data
-                   ▼
-              Object Storage
-              (S3-compatible)
+                  ┌───────────────────────────────────────────────┐
+                  │            Internet Computer                  │
+                  │                                               │
+                  │  ┌──────────────────┐  ┌──────────────────┐   │
+ User/Browser ───►│  │  Your Backend    │  │ Cashier Canister  │  │
+       │          │  │  Canister        │  │ (billing / auth)  │  │
+       │          │  └──────────────────┘  └──────────────────┘   │
+       │          └───────────────────────────────────────────────┘
+       │                                          ▲
+       │ PUT blob-tree + chunks                   │ budget check
+       │ GET blob                                 │
+       ▼                                          │
+  ┌──────────────────────────────────┐            │
+  │  Storage Gateway                 │────────────┘
+  │  blob.caffeine.ai                │
+  │  (verifies tree, cert & budget)  │──────────┐
+  └──────────────────────────────────┘          │
+       ▲                                        │ stores data
+       │ periodic: BlobsAreLive checks,          ▼
+       │ deletion confirmation           Object Storage
+       │                                 (S3-compatible)
+  ┌──────────────────────────┐
+  │  Background Scrubber     │
+  │  (garbage collection)    │
+  └──────────────────────────┘
 ```
 
-### How a file upload works
+### Component roles
 
-1. The frontend computes a SHA-256 hash of the file.
-2. The frontend calls `_immutableObjectStorageCreateCertificate(hash)` on your canister. Your
-   canister records that this hash is expected and returns a signed certificate.
-3. The frontend `PUT`s the file bytes to `https://blob.caffeine.ai/blob/<canister-id>/<hash>`,
-   attaching the certificate as a header.
-4. The gateway checks your canister's balance (via the Cashier), verifies the certificate, and
-   accepts the upload only if both pass.
-5. The file is now accessible at the same URL via `GET`.
+| Component | Operated by | Purpose |
+|-----------|-------------|---------|
+| **Your Backend Canister** | You | Stores blob hashes on-chain. Issues upload certificates. Tracks which blobs are live vs. deleted. |
+| **Cashier Canister** | Caffeine | Manages payment accounts (cycles-based). Publishes the list of authorized gateway principals. Tracks budgets per data owner. |
+| **Storage Gateway** | Caffeine | Accepts file uploads (after verifying the upload certificate and budget). Serves file downloads. Endpoint: `https://blob.caffeine.ai` |
+| **Background Scrubber** | Caffeine | May periodically query your canister via `_immutableObjectStorageBlobsAreLive` to verify blobs are still needed. Calls `_immutableObjectStorageBlobsToDelete` and `_immutableObjectStorageConfirmBlobDeletion` to clean up deleted blobs. |
+
+---
+
+## Integration Checklist
+
+This is the complete list of steps to integrate Caffeine Object Storage into your app.
+
+### 1. Implement the storage protocol on your canister
+
+Your backend canister must implement six methods. Five follow the `_immutableObjectStorage*` naming
+convention and are called by the gateway or scrubber. One (`add_gateway_principal`) is for admin
+setup.
+
+See [Canister API Reference](#canister-api-reference) for the full Candid interface and
+[the example backends](#repo-structure) for reference implementations in Rust and Motoko.
+
+### 2. Install the `icfs` CLI
+
+```bash
+curl -L https://caffeinelabs.github.io/object-storage/artifacts/icfs/latest/icfs-linux-x86_64 -o icfs
+chmod +x ./icfs
+# Move to a directory in your PATH
+```
+
+### 3. Configure environment
+
+```bash
+export CASHIER_CANISTER_ID=72ch2-fiaaa-aaaar-qbsvq-cai
+export STORAGE_GATEWAY_URL=https://blob.caffeine.ai
+export NETWORK_URL=https://icp-api.io
+export PRIVATE_KEY_FILE=~/.config/dfx/identity/default/identity.pem
+export WALLET_CANISTER_ID=$(dfx identity get-wallet --network ic)
+```
+
+### 4. Fund your payment account
+
+```bash
+icfs cashier payment-account top-up --amount 10T
+icfs cashier payment-account balance
+```
+
+### 5. Deploy your backend canister
+
+```bash
+# Rust
+cd rust-backend && dfx deploy --network ic
+
+# Motoko
+cd motoko-backend && mops install && dfx deploy --network ic
+```
+
+You can optionally pass gateway principals at init time (see [Init Arguments](#init-arguments)).
+
+### 6. Register the storage gateway on your canister
+
+The gateway needs to be authorized on your canister so it can manage blob lifecycle
+(liveness checks, deletion confirmation). Fetch the gateway principal from the Cashier
+and register it:
+
+```bash
+GATEWAY_PRINCIPAL=$(dfx canister call $CASHIER_CANISTER_ID storage_gateway_list_v1 '()' --network ic \
+  | grep -oP '[a-z0-9-]+' | head -1)
+
+dfx canister call example_backend add_gateway_principal \
+  "(principal \"$GATEWAY_PRINCIPAL\")" --network ic
+```
+
+**Why:** The gateway calls `_immutableObjectStorageBlobsAreLive`, `_immutableObjectStorageBlobsToDelete`,
+and `_immutableObjectStorageConfirmBlobDeletion` on your canister. These methods check
+`caller_is_gateway()` — the gateway must be in your authorized list.
+
+### 7. Link your canister to your payment account
+
+```bash
+icfs cashier payment-account add-canister \
+  --paid-canister $(dfx canister id example_backend --network ic) \
+  --limit 5T
+```
+
+**Why:** The Cashier needs to know which payment account covers storage costs for your canister.
+The `--limit` controls the maximum daily spend.
+
+### 8. Upload and download files
+
+See the [Upload Protocol](#upload-protocol) section for the full TypeScript implementation,
+or use the CLI:
+
+```bash
+# Upload
+icfs blob upload --input-file ./my-photo.jpg \
+  --owner $(dfx canister id example_backend --network ic)
+
+# Download
+icfs blob download \
+  --owner $(dfx canister id example_backend --network ic) \
+  --root-hash sha256:ba7816bf… \
+  --output-file ./downloaded.jpg
+```
+
+---
+
+## Upload Protocol
+
+Uploading a file involves four steps: chunking + hashing, getting a certificate, sending the
+blob tree, and sending each chunk. The frontend example implements this in full — see
+[`frontend/src/storage-client.ts`](frontend/src/storage-client.ts).
+
+### Step 1: Chunk the file and build a merkle tree
+
+Files are split into 1 MiB (1,048,576 byte) chunks. Each chunk is hashed with the
+domain separator `icfs-chunk/`:
+
+```
+chunk_hash = SHA-256("icfs-chunk/" || chunk_bytes)
+```
+
+The chunk hashes form the leaves of a binary merkle tree (type: **DSBMTWH** —
+Domain-Separated Binary Merkle Tree With Headers). Internal nodes are computed with
+the domain separator `ynode/`:
+
+```
+node_hash = SHA-256("ynode/" || left_child_hash || right_child_hash)
+```
+
+If a level has an odd number of nodes, the missing right sibling uses the sentinel
+value `"UNBALANCED"` (the literal UTF-8 bytes, not a hash).
+
+File metadata headers (Content-Type, Content-Length) are hashed with the domain
+separator `icfs-metadata/` and combined with the chunk tree root:
+
+```
+metadata_hash = SHA-256("icfs-metadata/" || sorted_header_lines)
+root_hash = SHA-256("ynode/" || chunks_root || metadata_hash)
+```
+
+The resulting root hash is formatted as `sha256:<64-hex-chars>`.
+
+### Step 2: Get an upload certificate from your canister
+
+Call `_immutableObjectStorageCreateCertificate(root_hash)` on your backend canister as
+an **update call**. This does two things:
+
+1. Records the hash as a live blob on your canister.
+2. Returns `{ method: "upload", blob_hash: root_hash }`.
+
+The important part is **not** the return value — it's the **IC response certificate**
+attached to the update call response. This certificate proves that the canister authorized
+the upload. Extract it from the V3 response body:
+
+```typescript
+const result = await agent.call(canisterId, {
+  methodName: '_immutableObjectStorageCreateCertificate',
+  arg: IDL.encode([IDL.Text], [rootHash]),
+});
+if (isV3ResponseBody(result.response.body)) {
+  const certificateBytes = result.response.body.certificate;
+  // Use certificateBytes in the next step
+}
+```
+
+### Step 3: Send the blob tree to the gateway
+
+```
+PUT {gateway}/v1/blob-tree/
+Content-Type: application/json
+```
+
+Request body:
+```json
+{
+  "blob_tree": {
+    "tree_type": "DSBMTWH",
+    "chunk_hashes": ["sha256:...", "sha256:..."],
+    "tree": { "hash": "sha256:...", "left": {...}, "right": {...} },
+    "headers": ["Content-Length: 12345", "Content-Type: application/octet-stream"]
+  },
+  "bucket_name": "default-bucket",
+  "num_blob_bytes": 12345,
+  "owner": "<your-canister-id>",
+  "project_id": "0000000-0000-0000-0000-00000000000",
+  "headers": ["Content-Length: 12345", "Content-Type: application/octet-stream"],
+  "auth": {
+    "OwnerEgressSignature": [/* certificate bytes as number array */]
+  }
+}
+```
+
+The gateway verifies that:
+- The certificate is a valid IC response certificate
+- The certified response contains `method: "upload"` and the matching `blob_hash`
+- The canister has sufficient budget (checked against the Cashier)
+
+### Step 4: Upload each chunk
+
+```
+PUT {gateway}/v1/chunk/?owner_id=...&blob_hash=...&chunk_hash=...&chunk_index=...&bucket_name=...&project_id=...
+Content-Type: application/octet-stream
+Body: <raw chunk bytes>
+```
+
+Chunks can be uploaded in parallel (the example uses up to 10 concurrent uploads).
+When the last chunk is received, the gateway responds with `{ "status": "blob_complete" }`.
+
+### Downloading a file
+
+Construct the download URL:
+
+```
+GET {gateway}/v1/blob/?blob_hash=sha256:...&owner_id=<canister-id>&project_id=<project-id>
+```
+
+The gateway serves verified data — no client-side merkle proof verification is needed.
+
+---
+
+## Canister API Reference
+
+Both the Rust and Motoko backends expose the same interface. The methods are organized into
+three groups based on who calls them.
+
+### Init Arguments
+
+The canister optionally accepts gateway principals at init time, so you can skip the
+separate `add_gateway_principal` call during setup:
+
+```candid
+type InitArgs = record {
+    gateway_principals : opt vec principal;
+};
+
+service : (opt InitArgs) -> { ... };
+```
+
+Pass `null` or omit the argument to deploy with no pre-registered gateways.
+
+### User-facing API (called by your frontend)
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `_immutableObjectStorageCreateCertificate` | `(text) -> (CreateCertificateResult)` | Call with the `sha256:...` root hash before uploading. Records the blob as live and returns a certificate (via the IC response) that the gateway requires. |
+| `set_blob_info` | `(text, text, nat64, text) -> ()` | Attach display metadata (name, size, content type) to a blob after upload. |
+| `list_blobs` | `() -> (vec BlobInfo) query` | List all live blobs with metadata. |
+| `delete_blob` | `(text) -> ()` | Mark a blob for deletion. The scrubber will remove it from storage. |
+
+### Gateway / Scrubber API (called automatically — do not call from your frontend)
+
+| Method | Signature | Called by | Purpose |
+|--------|-----------|-----------|---------|
+| `_immutableObjectStorageUpdateGatewayPrincipals` | `() -> ()` | Gateway | Refresh gateway principal list. No-op in this example (gateways are registered via `add_gateway_principal`). |
+| `_immutableObjectStorageBlobsAreLive` | `(vec blob) -> (vec bool) query` | Background Scrubber | May periodically check whether blobs (each identified by a 32-byte hash) are still needed. Returns a `vec bool` in the same order as the input — `true` if the blob is live and not marked for deletion. This  |
+| `_immutableObjectStorageBlobsToDelete` | `() -> (vec text) query` | Background Scrubber | Returns hashes of blobs marked for deletion. Only responds to authorized gateway principals. |
+| `_immutableObjectStorageConfirmBlobDeletion` | `(vec blob) -> ()` | Background Scrubber | Confirms blobs have been removed from storage. The canister then removes them from its state. |
+
+### Admin API (canister controller only)
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `add_gateway_principal` | `(principal) -> ()` | Register a gateway principal so it can call the gateway/scrubber methods above. |
+
+### Candid types
+
+```candid
+type BlobInfo = record {
+    hash         : text;
+    name         : text;
+    size         : nat64;
+    content_type : text;
+    created_at   : nat64;
+};
+
+type CreateCertificateResult = record { method : text; blob_hash : text };
+
+type InitArgs = record {
+    gateway_principals : opt vec principal;
+};
+```
 
 ---
 
@@ -100,11 +384,11 @@ sooner, [submit a feature request](https://github.com/caffeinelabs/object-storag
 
 ## Getting Started
 
-Install the prerequisites below, then run the [recommended test script](#run-tests-recommended) to build and verify the example. When you are ready to use it on the IC, follow the deploy steps (icfs, environment, fund account, deploy canister, register gateway, link payment account).
+Install the prerequisites below, then run the [recommended test script](#run-tests-recommended) to
+build and verify the example. When you are ready to use it on the IC, follow the
+[Integration Checklist](#integration-checklist).
 
 ### Prerequisites — install these first
-
-Install the tools below, then verify each one. You need **Rust** and **dfx** for both backends; **mops** and **Node** only if you use the Motoko backend or the frontend.
 
 | Tool    | Version   | Install |
 |---------|-----------|---------|
@@ -124,144 +408,24 @@ dfx --version
 # For the test script: python3 --version  (3.10+)
 ```
 
-For **production deployment** you also need a **cycles wallet** with enough cycles to fund the payment account (10 T cycles recommended). Obtain cycles by converting ICP via the [NNS dapp](https://nns.ic0.app).
+For **production deployment** you also need a **cycles wallet** with enough cycles to fund the
+payment account (at least 10 T cycles recommended, more is better). Obtain cycles by converting ICP via the
+[NNS dapp](https://nns.ic0.app).
 
 ### Run tests (recommended)
 
-From the `immutable-object-storage-example` directory, run:
+From the repo root:
 
 ```bash
 python3 scripts/run_tests.py
 ```
 
-The script (Python 3.10+) checks for `cargo`, `dfx`, and `mops`; downloads the PocketIC binary into `.tools/` if missing; builds both backends; and runs Rust unit tests and PocketIC canister tests. You must have the prerequisites above installed first.
+The script checks for `cargo`, `dfx`, and `mops`; downloads the PocketIC binary into `.tools/` if
+missing; builds both backends; and runs Rust unit tests and PocketIC canister tests.
 
-Manual alternative (not recommended): see [docs/automation-options.md](docs/automation-options.md) for manual build/test steps and other automation (mise, Docker).
+Manual alternative: see [docs/automation-options.md](docs/automation-options.md).
 
-### Step 1 — Install `icfs`
-
-`icfs` is the Caffeine CLI for managing your storage account and uploading files.
-
-```bash
-curl -L https://caffeinelabs.github.io/object-storage/artifacts/icfs/latest/icfs-linux-x86_64 -o icfs
-chmod +x ./icfs
-```
-
-Move the icfs binary to some directory that is in your PATH, e.g. `$HOME/bin` or `/usr/local/bin`
-
-Verify:
-
-```bash
-icfs --version
-```
-
-### Step 2 — Configure environment
-
-```bash
-# Production endpoints (use these unless you are a Caffeine developer)
-export CASHIER_CANISTER_ID=72ch2-fiaaa-aaaar-qbsvq-cai
-export STORAGE_GATEWAY_URL=https://blob.caffeine.ai
-export NETWORK_URL=https://icp-api.io
-
-# Your DFX identity key (the owner of your payment account)
-export PRIVATE_KEY_FILE=~/.config/dfx/identity/default/identity.pem
-
-# Your dfx cycles wallet (needed for top-ups; cycles can only be sent from canisters)
-export WALLET_CANISTER_ID=$(dfx identity get-wallet --network ic)
-```
-
-> Tip: Add these to a `.env` file and `source` it at the start of each session.
-
-### Step 3 — Fund your payment account
-
-Your payment account is identified by your identity principal. Top it up with cycles:
-
-```bash
-icfs cashier payment-account top-up --amount 10T
-```
-
-Check the balance:
-
-```bash
-icfs cashier payment-account balance
-```
-
-### Step 4 — Deploy your backend canister
-
-Choose either the Rust or Motoko backend. Both implement the same interface.
-
-**Rust backend:**
-
-```bash
-cd rust-backend
-dfx deploy --network ic
-```
-
-**Motoko backend:**
-
-```bash
-cd motoko-backend
-mops install
-dfx deploy --network ic
-```
-
-Note your canister ID from the deploy output, or retrieve it later:
-
-```bash
-dfx canister id example_backend --network ic
-```
-
-### Step 5 — Register the storage gateway
-
-After deploying, register the storage gateway principal so it can manage blob
-lifecycle on your canister. The gateway principal is published by the Cashier:
-
-```bash
-# Fetch the gateway principal list from the Cashier
-GATEWAY_PRINCIPAL=$(dfx canister call 72ch2-fiaaa-aaaar-qbsvq-cai storage_gateway_list_v1 '()' --network ic \
-  | grep -oP '[a-z0-9-]+' | head -1)
-
-# Register it on your canister (only canister controllers can call this)
-dfx canister call example_backend add_gateway_principal "(principal \"$GATEWAY_PRINCIPAL\")" --network ic
-```
-
-### Step 6 — Link your canister to your payment account
-
-```bash
-icfs cashier payment-account add-canister \
-  --paid-canister $(dfx canister id example_backend --network ic) \
-  --limit 5T
-```
-
-This tells the Cashier that your payment account will cover up to 5 T cycles per day for this
-canister. Adjust `--limit` based on your expected usage.
-
-Verify:
-
-```bash
-icfs cashier payment-account list-canisters
-```
-
-### Step 7 — Upload your first file
-
-```bash
-icfs blob upload \
-  --input-file ./my-photo.jpg \
-  --owner $(dfx canister id example_backend --network ic)
-```
-
-The CLI prints the blob hash (e.g. `sha256:ba7816bf…`). Download it back:
-
-```bash
-icfs blob download \
-  --owner $(dfx canister id example_backend --network ic) \
-  --root-hash sha256:ba7816bf… \
-  --output-file ./downloaded.jpg
-```
-
-### Step 8 — (Optional) Deploy the frontend
-
-The frontend is a React app that lets users upload, browse, and download files through a browser.
+### (Optional) Deploy the frontend
 
 ```bash
 cd frontend
@@ -269,79 +433,30 @@ npm install
 dfx deploy --network ic
 ```
 
-Open the URL printed by `dfx deploy` in your browser.
+Configure the frontend via `.env`:
 
-### Next steps: what to change for your app
-
-After deploying, point the frontend (or your own client) at your backend and adjust config as needed:
-
-| What | Where | What to set |
-|------|--------|--------------|
-| **Backend canister ID** | Frontend: create `frontend/.env` (or `.env.local`) | `VITE_CANISTER_ID=<your-example_backend-canister-id>` so the UI talks to your deployed backend. |
-| **Frontend dfx remote** | `frontend/dfx.json` → `example_backend.remote.id.ic` | Replace `REPLACE_WITH_YOUR_CANISTER_ID` with your backend canister ID if you deploy the frontend with a pre-deployed backend. |
-| **Gateway / network (optional)** | Frontend: `.env` | `VITE_STORAGE_GATEWAY_URL`, `VITE_IC_URL` for dev/staging (defaults: prod blob.caffeine.ai and icp-api.io). |
-
-For your own canister (not this example), you would: implement the same [Candid interface](#canister-api-reference), register the storage gateway via `add_gateway_principal`, link the canister to your payment account with `icfs cashier payment-account add-canister`, and ensure callers use the certificate flow for uploads.
-
----
-
-## Canister API Reference
-
-Both the Rust and Motoko backends expose the same Candid interface. The gateway-facing methods
-(`_immutableObjectStorage*`) are called by the storage gateway — do not call them directly from
-your frontend.
-
-```candid
-type BlobInfo = record {
-    hash         : text;
-    name         : text;
-    size         : nat64;
-    content_type : text;
-    created_at   : nat64;
-};
-
-type CreateCertificateResult = record { method : text; blob_hash : text };
-
-service : () -> {
-    // ── Called by the storage gateway (do not call directly) ──────────────────
-
-    _immutableObjectStorageUpdateGatewayPrincipals : () -> ();
-    _immutableObjectStorageBlobIsLive : (blob) -> (bool) query;
-    _immutableObjectStorageBlobsToDelete : () -> (vec text) query;
-    _immutableObjectStorageConfirmBlobDeletion : (vec blob) -> ();
-    _immutableObjectStorageCreateCertificate : (text) -> (CreateCertificateResult);
-
-    // ── Admin (canister controller only) ─────────────────────────────────────
-
-    // Register a gateway principal so it can manage blob deletion.
-    add_gateway_principal : (principal) -> ();
-
-    // ── User-facing API ──────────────────────────────────────────────────────
-
-    set_blob_info : (text, text, nat64, text) -> ();
-    list_blobs : () -> (vec BlobInfo) query;
-    delete_blob : (text) -> ();
-};
-```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VITE_CANISTER_ID` | — | Your deployed backend canister ID (required) |
+| `VITE_STORAGE_GATEWAY_URL` | `https://blob.caffeine.ai` | Storage gateway URL |
+| `VITE_IC_URL` | `https://icp-api.io` | IC network URL |
 
 ---
 
 ## Monitoring
 
-Check your payment account balance and spending:
-
 ```bash
 # Current balance
 icfs cashier payment-account balance
 
-# Full audit log (all transactions)
+# Full audit log
 icfs cashier payment-account audit-log
 
 # Canister-specific spending
 icfs cashier payment-account audit-log | grep <CANISTER_ID>
 ```
 
-Set up alerts on these Prometheus metrics exposed by the Cashier:
+Prometheus metrics exposed by the Cashier:
 
 | Metric                                                            | Alert when…           |
 |-------------------------------------------------------------------|-----------------------|
@@ -353,49 +468,45 @@ Set up alerts on these Prometheus metrics exposed by the Cashier:
 ## Repo Structure
 
 ```
-example/
-├── README.md              This file
+immutable-object-storage-example/
+├── README.md               This file
 ├── scripts/
-│   ├── run_tests.py       Recommended: build + run all tests (Python 3.10+)
-│   └── setup.sh           Automates deploy steps (icfs, gateway, payment account)
-├── rust-backend/          Rust ic-cdk canister
+│   ├── run_tests.py        Build + run all tests (Python 3.10+)
+│   └── setup.sh            Automates deploy steps
+├── rust-backend/           Rust ic-cdk canister
 │   ├── Cargo.toml
 │   ├── dfx.json
 │   └── src/
-│       ├── lib.rs         Canister entry point + app API
-│       └── storage.rs     Storage protocol implementation
-├── motoko-backend/        Motoko canister
+│       ├── lib.rs          Canister entry + app API
+│       └── storage.rs      Storage protocol implementation
+├── motoko-backend/         Motoko canister
 │   ├── dfx.json
 │   ├── mops.toml
 │   └── src/main.mo
-├── tests/                 PocketIC canister tests (Rust + Motoko)
+├── tests/                  PocketIC canister tests
 │   ├── Cargo.toml
 │   └── src/
-│       ├── lib.rs         Shared helpers and Candid types
+│       ├── lib.rs          Shared helpers and Candid types
 │       ├── rust_backend.rs
 │       └── motoko_backend.rs
-└── frontend/              React + Vite frontend
+└── frontend/               React + Vite frontend
     ├── package.json
     ├── dfx.json
     └── src/
+        ├── App.tsx          Upload/download UI
+        ├── canister.ts      IC agent wiring
+        └── storage-client.ts  Full upload protocol implementation
 ```
-
-## Testing
-
-**Recommended:** Use the [Run tests (recommended)](#run-tests-recommended) script above. It builds both backends, ensures PocketIC is available (downloads it if needed), and runs Rust unit tests plus PocketIC canister tests for both backends.
-
-What the script does: builds `rust-backend` and `motoko-backend` WASMs, runs `cargo test` in `rust-backend` (unit tests for storage logic), then runs `cargo test` in `tests/` (PocketIC tests against both WASMs). Manual steps and other options (mise, Docker) are in [docs/automation-options.md](docs/automation-options.md).
 
 ## Running the Automated Setup
 
-If you prefer a single script over the manual steps, run:
+If you prefer a single script over the manual steps:
 
 ```bash
-cd example
 ./scripts/setup.sh
 ```
 
-The script installs `icfs`, validates your environment variables, tops up your payment account,
+The script installs `icfs`, validates environment variables, tops up your payment account,
 deploys the canister, registers the gateway principal, and links it to your payment account.
 
 ---
