@@ -103,15 +103,18 @@ persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Princ
     /// No-op. Gateways are registered via `addGatewayPrincipal` in this example.
     public shared func _immutableObjectStorageUpdateGatewayPrincipals() : async () {};
 
-    /// Returns `true` if the blob identified by the 32-byte hash is still live.
-    public shared query func _immutableObjectStorageBlobIsLive(hashBytes : Blob) : async Bool {
-        switch (bytesToHash(hashBytes)) {
-            case null false;
-            case (?hash) {
-                Map.containsKey(liveBlobs, Text.compare, hash)
-                    and not Set.contains(pendingDelete, Text.compare, hash);
-            };
-        }
+    /// Returns whether each blob (identified by a 32-byte hash) is still live.
+    /// Input and output arrays have the same length and matching indices.
+    public shared query func _immutableObjectStorageBlobsAreLive(hashBytesList : [Blob]) : async [Bool] {
+        Array.map<Blob, Bool>(hashBytesList, func(hashBytes : Blob) : Bool {
+            switch (bytesToHash(hashBytes)) {
+                case null false;
+                case (?hash) {
+                    Map.containsKey(liveBlobs, Text.compare, hash)
+                        and not Set.contains(pendingDelete, Text.compare, hash);
+                };
+            }
+        })
     };
 
     /// Returns blob hashes marked for deletion (gateway-only).

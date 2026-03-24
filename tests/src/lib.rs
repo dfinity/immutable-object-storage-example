@@ -110,19 +110,29 @@ pub fn create_certificate(
     Ok(Decode!(&bytes, CreateCertificateResult).expect("decode"))
 }
 
+pub fn blobs_are_live(
+    pic: &PocketIc,
+    canister_id: Principal,
+    hash_bytes_list: Vec<Vec<u8>>,
+) -> Result<Vec<bool>, pocket_ic::RejectResponse> {
+    let payload = candid::encode_one(hash_bytes_list).expect("encode");
+    let bytes = pic.query_call(
+        canister_id,
+        SENDER,
+        "_immutableObjectStorageBlobsAreLive",
+        payload,
+    )?;
+    Ok(Decode!(&bytes, Vec<bool>).expect("decode"))
+}
+
+/// Convenience wrapper for checking a single blob.
 pub fn blob_is_live(
     pic: &PocketIc,
     canister_id: Principal,
     hash_bytes: Vec<u8>,
 ) -> Result<bool, pocket_ic::RejectResponse> {
-    let payload = candid::encode_one(hash_bytes).expect("encode");
-    let bytes = pic.query_call(
-        canister_id,
-        SENDER,
-        "_immutableObjectStorageBlobIsLive",
-        payload,
-    )?;
-    Ok(Decode!(&bytes, bool).expect("decode"))
+    let results = blobs_are_live(pic, canister_id, vec![hash_bytes])?;
+    Ok(results.into_iter().next().unwrap_or(false))
 }
 
 pub fn blobs_to_delete(

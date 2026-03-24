@@ -18,7 +18,7 @@ export const idlFactory = ({ IDL }) => {
   return IDL.Service({
     // Immutable object storage protocol
     _immutableObjectStorageUpdateGatewayPrincipals: IDL.Func([], [], []),
-    _immutableObjectStorageBlobIsLive: IDL.Func([IDL.Vec(IDL.Nat8)], [IDL.Bool], ["query"]),
+    _immutableObjectStorageBlobsAreLive: IDL.Func([IDL.Vec(IDL.Vec(IDL.Nat8))], [IDL.Vec(IDL.Bool)], ["query"]),
     _immutableObjectStorageBlobsToDelete: IDL.Func([], [IDL.Vec(IDL.Text)], ["query"]),
     _immutableObjectStorageConfirmBlobDeletion: IDL.Func([IDL.Vec(IDL.Vec(IDL.Nat8))], [], []),
     _immutableObjectStorageCreateCertificate: IDL.Func([IDL.Text], [CreateCertificateResult], []),

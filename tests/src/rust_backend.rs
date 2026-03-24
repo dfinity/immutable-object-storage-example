@@ -6,7 +6,7 @@ use candid::Principal;
 use pocket_ic::PocketIc;
 
 use crate::{
-    add_gateway_principal_with_sender, blob_is_live, blobs_to_delete_with_sender,
+    add_gateway_principal_with_sender, blob_is_live, blobs_are_live, blobs_to_delete_with_sender,
     confirm_blob_deletion, create_certificate, delete_blob, deploy_canister,
     deploy_canister_with_controller, deploy_canister_with_init_args, hash_string_to_32_bytes,
     list_blobs, load_wasm, set_blob_info, InitArgs,
@@ -70,6 +70,30 @@ fn test_blob_is_live() {
     let unknown_hash_bytes = vec![0u8; 32];
     let live_unknown = blob_is_live(&pic, canister_id, unknown_hash_bytes).expect("query");
     assert!(!live_unknown);
+}
+
+#[test]
+fn test_blobs_are_live_batch() {
+    let pic = PocketIc::new();
+    let wasm = load_wasm(&rust_wasm_path());
+    let canister_id = deploy_canister(&pic, wasm);
+
+    let hash_a = "sha256:".to_string() + &"a".repeat(64);
+    let hash_b = "sha256:".to_string() + &"b".repeat(64);
+    create_certificate(&pic, canister_id, &hash_a).expect("create_certificate");
+
+    let results = blobs_are_live(
+        &pic,
+        canister_id,
+        vec![
+            hash_string_to_32_bytes(&hash_a),
+            hash_string_to_32_bytes(&hash_b),
+            vec![0u8; 32],
+        ],
+    )
+    .expect("blobs_are_live");
+
+    assert_eq!(results, vec![true, false, false]);
 }
 
 #[test]

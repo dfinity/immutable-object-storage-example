@@ -175,15 +175,21 @@ pub(crate) fn caller_is_gateway() -> bool {
 #[update(name = "_immutableObjectStorageUpdateGatewayPrincipals")]
 fn update_gateway_principals() {}
 
-/// Returns true if the blob identified by a 32-byte hash is still live.
-#[query(name = "_immutableObjectStorageBlobIsLive")]
-fn blob_is_live(hash_bytes: Vec<u8>) -> bool {
-    let Some(hash) = bytes_to_sha256_string(&hash_bytes) else {
-        return false;
-    };
-    let key = HashKey(hash);
-    BLOBS.with(|b| b.borrow().contains_key(&key))
-        && !PENDING_DELETE.with(|p| p.borrow().contains_key(&key))
+/// Returns whether each blob (identified by a 32-byte hash) is still live.
+/// Input and output vecs have the same length and matching indices.
+#[query(name = "_immutableObjectStorageBlobsAreLive")]
+fn blobs_are_live(hash_bytes_list: Vec<Vec<u8>>) -> Vec<bool> {
+    hash_bytes_list
+        .iter()
+        .map(|hash_bytes| {
+            let Some(hash) = bytes_to_sha256_string(hash_bytes) else {
+                return false;
+            };
+            let key = HashKey(hash);
+            BLOBS.with(|b| b.borrow().contains_key(&key))
+                && !PENDING_DELETE.with(|p| p.borrow().contains_key(&key))
+        })
+        .collect()
 }
 
 /// Returns hashes this canister has marked for deletion (gateway-only).

@@ -12,7 +12,7 @@ type InitArgs = record {
   gateway_principals : opt vec principal;
 };
 service : (opt InitArgs) -> {
-  _immutableObjectStorageBlobIsLive : (blob) -> (bool) query;
+  _immutableObjectStorageBlobsAreLive : (vec blob) -> (vec bool) query;
   _immutableObjectStorageBlobsToDelete : () -> (vec text) query;
   _immutableObjectStorageConfirmBlobDeletion : (vec blob) -> ();
   _immutableObjectStorageCreateCertificate : (text) -> (CreateCertificateResult);
