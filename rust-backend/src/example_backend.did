@@ -9,7 +9,7 @@ type BlobInfo = record {
 };
 type CreateCertificateResult = record { method : text; blob_hash : text };
 type InitArgs = record {
-  gateway_principals : opt vec principal;
+  cashier_canister_id : opt principal;
 };
 service : (opt InitArgs) -> {
   _immutableObjectStorageBlobsAreLive : (vec blob) -> (vec bool) query;
@@ -17,7 +17,6 @@ service : (opt InitArgs) -> {
   _immutableObjectStorageConfirmBlobDeletion : (vec blob) -> ();
   _immutableObjectStorageCreateCertificate : (text) -> (CreateCertificateResult);
   _immutableObjectStorageUpdateGatewayPrincipals : () -> ();
-  add_gateway_principal : (principal) -> ();
   delete_blob : (text) -> ();
   list_blobs : () -> (vec BlobInfo) query;
   set_blob_info : (text, text, nat64, text) -> ();

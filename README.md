@@ -69,9 +69,8 @@ This is the complete list of steps to integrate Caffeine Object Storage into you
 
 ### 1. Implement the storage protocol on your canister
 
-Your backend canister must implement six methods. Five follow the `_immutableObjectStorage*` naming
-convention and are called by the gateway or scrubber. One (`add_gateway_principal`) is for admin
-setup.
+Your backend canister must implement five `_immutableObjectStorage*` methods that the gateway
+and scrubber call automatically.
 
 See [Canister API Reference](#canister-api-reference) for the full Candid interface and
 [the example backends](#repo-structure) for reference implementations in Rust and Motoko.
@@ -111,25 +110,26 @@ cd rust-backend && dfx deploy --network ic
 cd motoko-backend && mops install && dfx deploy --network ic
 ```
 
-You can optionally pass gateway principals at init time (see [Init Arguments](#init-arguments)).
+You can optionally pass a custom Cashier canister ID at init time (see [Init Arguments](#init-arguments)).
 
-### 6. Register the storage gateway on your canister
+### 6. Fetch gateway principals
 
 The gateway needs to be authorized on your canister so it can manage blob lifecycle
-(liveness checks, deletion confirmation). Fetch the gateway principal from the Cashier
-and register it:
+(liveness checks, deletion confirmation). Call `_immutableObjectStorageUpdateGatewayPrincipals`
+on your canister — it queries the Cashier for the current list of gateway principals and
+stores them locally:
 
 ```bash
-GATEWAY_PRINCIPAL=$(dfx canister call $CASHIER_CANISTER_ID storage_gateway_list_v1 '()' --network ic \
-  | grep -oP '[a-z0-9-]+' | head -1)
-
-dfx canister call example_backend add_gateway_principal \
-  "(principal \"$GATEWAY_PRINCIPAL\")" --network ic
+dfx canister call example_backend _immutableObjectStorageUpdateGatewayPrincipals '()' --network ic
 ```
 
 **Why:** The gateway calls `_immutableObjectStorageBlobsAreLive`, `_immutableObjectStorageBlobsToDelete`,
 and `_immutableObjectStorageConfirmBlobDeletion` on your canister. These methods check
 `caller_is_gateway()` — the gateway must be in your authorized list.
+
+**Note:** The list of gateways is dynamic and may change over time as new gateways are added
+or removed. Call `_immutableObjectStorageUpdateGatewayPrincipals` periodically (or after
+being notified of a gateway change) to stay up to date.
 
 ### 7. Link your canister to your payment account
 
@@ -282,18 +282,18 @@ three groups based on who calls them.
 
 ### Init Arguments
 
-The canister optionally accepts gateway principals at init time, so you can skip the
-separate `add_gateway_principal` call during setup:
+The canister optionally accepts a Cashier canister ID at init time. If not provided,
+it defaults to the production Cashier (`72ch2-fiaaa-aaaar-qbsvq-cai`):
 
 ```candid
 type InitArgs = record {
-    gateway_principals : opt vec principal;
+    cashier_canister_id : opt principal;
 };
 
 service : (opt InitArgs) -> { ... };
 ```
 
-Pass `null` or omit the argument to deploy with no pre-registered gateways.
+Pass a custom Cashier ID when deploying to a dev or test environment.
 
 ### User-facing API (called by your frontend)
 
@@ -308,16 +308,10 @@ Pass `null` or omit the argument to deploy with no pre-registered gateways.
 
 | Method | Signature | Called by | Purpose |
 |--------|-----------|-----------|---------|
-| `_immutableObjectStorageUpdateGatewayPrincipals` | `() -> ()` | Gateway | Refresh gateway principal list. No-op in this example (gateways are registered via `add_gateway_principal`). |
+| `_immutableObjectStorageUpdateGatewayPrincipals` | `() -> ()` | Gateway / Admin | Queries the Cashier canister for the current list of gateway principals and stores them locally. Call after deployment and periodically to pick up gateway changes. |
 | `_immutableObjectStorageBlobsAreLive` | `(vec blob) -> (vec bool) query` | Background Scrubber | May periodically check whether blobs (each identified by a 32-byte hash) are still needed. Returns a `vec bool` in the same order as the input — `true` if the blob is live and not marked for deletion. This  |
 | `_immutableObjectStorageBlobsToDelete` | `() -> (vec text) query` | Background Scrubber | Returns hashes of blobs marked for deletion. Only responds to authorized gateway principals. |
 | `_immutableObjectStorageConfirmBlobDeletion` | `(vec blob) -> ()` | Background Scrubber | Confirms blobs have been removed from storage. The canister then removes them from its state. |
-
-### Admin API (canister controller only)
-
-| Method | Signature | Purpose |
-|--------|-----------|---------|
-| `add_gateway_principal` | `(principal) -> ()` | Register a gateway principal so it can call the gateway/scrubber methods above. |
 
 ### Candid types
 
@@ -333,7 +327,7 @@ type BlobInfo = record {
 type CreateCertificateResult = record { method : text; blob_hash : text };
 
 type InitArgs = record {
-    gateway_principals : opt vec principal;
+    cashier_canister_id : opt principal;
 };
 ```
 

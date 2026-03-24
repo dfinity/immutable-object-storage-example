@@ -109,6 +109,7 @@ def main() -> None:
     rust_dir = os.path.join(EXAMPLE_ROOT, "rust-backend")
     motoko_dir = os.path.join(EXAMPLE_ROOT, "motoko-backend")
     tests_dir = os.path.join(EXAMPLE_ROOT, "tests")
+    mock_cashier_dir = os.path.join(tests_dir, "mock-cashier")
 
     run(
         ["cargo", "build", "--target", "wasm32-unknown-unknown"],
@@ -129,6 +130,11 @@ def main() -> None:
         ["dfx", "build", "example_backend", "--check"],
         motoko_dir,
         "Building motoko-backend WASM...",
+    )
+    run(
+        ["cargo", "build", "--target", "wasm32-unknown-unknown"],
+        mock_cashier_dir,
+        "Building mock-cashier WASM...",
     )
     run(
         ["cargo", "test"],

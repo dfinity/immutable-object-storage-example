@@ -11,9 +11,11 @@
 //!
 //! ## Expected flow
 //!
-//! 1. **Register the gateway** — call `add_gateway_principal` (controller-only)
-//!    with the storage gateway's principal so that `caller_is_gateway()` passes
-//!    for gateway-initiated calls (`blobs_to_delete`, `confirm_blob_deletion`).
+//! 1. **Fetch gateway principals** — call
+//!    `_immutableObjectStorageUpdateGatewayPrincipals` after deployment. This
+//!    queries the Cashier canister for the current list of authorized gateways.
+//!    The list of gateways is dynamic and may change over time as new gateways
+//!    are added or removed by Caffeine.
 //! 2. **Upload** — your app calls `_immutableObjectStorageCreateCertificate`
 //!    with a blob hash. The canister records the hash as live and returns a
 //!    certificate the client forwards to the gateway.
@@ -38,9 +40,9 @@ use candid::CandidType;
 use candid::Decode;
 use candid::Encode;
 use candid::Principal;
-use ic_cdk::api::is_controller;
 use ic_cdk::api::msg_caller;
 use ic_cdk::api::time;
+use ic_cdk::call::Call;
 use ic_cdk::query;
 use ic_cdk::update;
 use ic_stable_structures::memory_manager::MemoryId;
@@ -72,6 +74,12 @@ thread_local! {
     static GATEWAY_PRINCIPALS: RefCell<StableBTreeMap<Principal, Empty, Memory>> = RefCell::new(
         StableBTreeMap::init(crate::MEMORY_MANAGER.with(|m| m.borrow().get(GATEWAY_PRINCIPALS_MEMORY_ID)))
     );
+
+    static CASHIER_CANISTER_ID: RefCell<Option<Principal>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn set_cashier_canister_id(id: Principal) {
+    CASHIER_CANISTER_ID.with(|c| *c.borrow_mut() = Some(id));
 }
 
 // =============================================================================
@@ -171,9 +179,35 @@ pub(crate) fn caller_is_gateway() -> bool {
 // Protocol endpoints: _immutableObjectStorage*
 // =============================================================================
 
-/// No-op. Gateways are registered via `add_gateway_principal` in this example.
+/// Fetches the current list of gateway principals from the Cashier canister
+/// and replaces the local authorized set. Call after deployment and
+/// periodically to pick up gateway changes.
 #[update(name = "_immutableObjectStorageUpdateGatewayPrincipals")]
-fn update_gateway_principals() {}
+async fn update_gateway_principals() {
+    let cashier_id = CASHIER_CANISTER_ID
+        .with(|c| *c.borrow())
+        .unwrap_or_else(|| ic_cdk::trap("cashier canister ID not configured"));
+
+    let response = Call::bounded_wait(cashier_id, "storage_gateway_principal_list_v1")
+        .await
+        .unwrap_or_else(|e| {
+            ic_cdk::trap(&format!("failed to query cashier: {e:?}"))
+        });
+    let principals: Vec<Principal> = response.candid().unwrap_or_else(|e| {
+        ic_cdk::trap(&format!("failed to decode cashier response: {e:?}"))
+    });
+
+    GATEWAY_PRINCIPALS.with(|g| {
+        let mut map = g.borrow_mut();
+        let existing: Vec<Principal> = map.iter().map(|e| e.key().clone()).collect();
+        for k in existing {
+            map.remove(&k);
+        }
+        for p in principals {
+            map.insert(p, Empty);
+        }
+    });
+}
 
 /// Returns whether each blob (identified by a 32-byte hash) is still live.
 /// Input and output vecs have the same length and matching indices.
@@ -246,23 +280,6 @@ fn create_certificate(hash: String) -> CreateCertificateResult {
         method: "upload".into(),
         blob_hash: hash,
     }
-}
-
-// =============================================================================
-// Admin: manage gateway principals (canister controller only)
-// =============================================================================
-
-/// Register a gateway principal (used by init and add_gateway_principal).
-pub(crate) fn register_gateway_principal(principal: Principal) {
-    GATEWAY_PRINCIPALS.with(|g| g.borrow_mut().insert(principal, Empty));
-}
-
-#[update]
-fn add_gateway_principal(principal: Principal) {
-    if !is_controller(&msg_caller()) {
-        ic_cdk::trap("only a canister controller can call add_gateway_principal");
-    }
-    register_gateway_principal(principal);
 }
 
 // =============================================================================

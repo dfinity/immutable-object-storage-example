@@ -12,8 +12,10 @@
 ///
 /// ## Integration checklist
 ///
-/// 1. Register the gateway — call `addGatewayPrincipal` (controller-only)
-///    with the storage gateway's principal.
+/// 1. Fetch gateway principals — call
+///    `_immutableObjectStorageUpdateGatewayPrincipals` after deployment.
+///    This queries the Cashier canister for the current list of authorized
+///    gateways. The list is dynamic and may change over time.
 /// 2. Upload — your app calls `_immutableObjectStorageCreateCertificate`
 ///    with a blob hash; the canister records it as live and returns a
 ///    certificate the client forwards to the gateway.
@@ -32,7 +34,7 @@ import Set       "mo:core/Set";
 import Text      "mo:core/Text";
 import Time      "mo:core/Time";
 
-persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Principal] }) {
+persistent actor class ExampleBackend(initArgs : ?{ cashier_canister_id : ?Principal }) {
 
     // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -56,15 +58,13 @@ persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Princ
     stable let pendingDelete = Set.empty<Text>();
     stable let gatewayPrincipals = Set.empty<Principal>();
 
-    // ── Init: register gateway principals if provided ─────────────────────────
+    let defaultCashier : Principal = Principal.fromText("72ch2-fiaaa-aaaar-qbsvq-cai");
+
+    stable var cashierId : Principal = defaultCashier;
 
     do {
         switch (initArgs) {
-            case (?{ gateway_principals = ?principals }) {
-                for (p in principals.values()) {
-                    Set.add(gatewayPrincipals, Principal.compare, p);
-                };
-            };
+            case (?{ cashier_canister_id = ?id }) { cashierId := id };
             case _ {};
         };
     };
@@ -100,8 +100,21 @@ persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Princ
 
     // ── _immutableObjectStorage* protocol methods ─────────────────────────────
 
-    /// No-op. Gateways are registered via `addGatewayPrincipal` in this example.
-    public shared func _immutableObjectStorageUpdateGatewayPrincipals() : async () {};
+    /// Fetches the current list of gateway principals from the Cashier canister
+    /// and replaces the local authorized set. Call after deployment and
+    /// periodically to pick up gateway changes.
+    public shared func _immutableObjectStorageUpdateGatewayPrincipals() : async () {
+        let cashier : actor { storage_gateway_principal_list_v1 : shared query () -> async [Principal] } =
+            actor (Principal.toText(cashierId));
+        let principals = await cashier.storage_gateway_principal_list_v1();
+        let existing = Iter.toArray(Set.values(gatewayPrincipals));
+        for (p in existing.values()) {
+            Set.remove(gatewayPrincipals, Principal.compare, p);
+        };
+        for (p in principals.values()) {
+            Set.add(gatewayPrincipals, Principal.compare, p);
+        };
+    };
 
     /// Returns whether each blob (identified by a 32-byte hash) is still live.
     /// Input and output arrays have the same length and matching indices.
@@ -162,15 +175,6 @@ persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Princ
         };
 
         { method = "upload"; blob_hash = hash }
-    };
-
-    // ── Admin: manage gateway principals (canister controller only) ───────────
-
-    public shared (msg) func addGatewayPrincipal(principal : Principal) : async () {
-        if (not Principal.isController(msg.caller)) {
-            Runtime.trap("only a canister controller can call addGatewayPrincipal");
-        };
-        Set.add(gatewayPrincipals, Principal.compare, principal);
     };
 
     // ── User-facing API ───────────────────────────────────────────────────────

@@ -23,9 +23,6 @@ export const idlFactory = ({ IDL }) => {
     _immutableObjectStorageConfirmBlobDeletion: IDL.Func([IDL.Vec(IDL.Vec(IDL.Nat8))], [], []),
     _immutableObjectStorageCreateCertificate: IDL.Func([IDL.Text], [CreateCertificateResult], []),
 
-    // Admin
-    add_gateway_principal: IDL.Func([IDL.Principal], [], []),
-
     // User-facing API
     set_blob_info: IDL.Func([IDL.Text, IDL.Text, IDL.Nat64, IDL.Text], [], []),
     list_blobs: IDL.Func([], [IDL.Vec(BlobInfo)], ["query"]),
@@ -35,7 +32,7 @@ export const idlFactory = ({ IDL }) => {
 
 export const init = ({ IDL }) => {
   const InitArgs = IDL.Record({
-    gateway_principals: IDL.Opt(IDL.Vec(IDL.Principal)),
+    cashier_canister_id: IDL.Opt(IDL.Principal),
   });
   return [IDL.Opt(InitArgs)];
 };

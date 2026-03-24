@@ -30,21 +30,22 @@ thread_local! {
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 }
 
+const DEFAULT_CASHIER_CANISTER_ID: &str = "72ch2-fiaaa-aaaar-qbsvq-cai";
+
 #[derive(CandidType, Deserialize, Default)]
 struct InitArgs {
-    pub gateway_principals: Option<Vec<Principal>>,
+    pub cashier_canister_id: Option<Principal>,
 }
 
 #[init]
 fn init(args: Option<InitArgs>) {
-    if let Some(InitArgs {
-        gateway_principals: Some(principals),
-    }) = args
-    {
-        for p in principals {
-            storage::register_gateway_principal(p);
-        }
-    }
+    let cashier_id = args
+        .and_then(|a| a.cashier_canister_id)
+        .unwrap_or_else(|| {
+            Principal::from_text(DEFAULT_CASHIER_CANISTER_ID)
+                .expect("invalid default cashier principal")
+        });
+    storage::set_cashier_canister_id(cashier_id);
 }
 
 // =============================================================================

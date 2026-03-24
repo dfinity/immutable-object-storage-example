@@ -47,7 +47,7 @@ pub struct CreateCertificateResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, CandidType)]
 pub struct InitArgs {
-    pub gateway_principals: Option<Vec<Principal>>,
+    pub cashier_canister_id: Option<Principal>,
 }
 
 // =============================================================================
@@ -65,17 +65,7 @@ pub fn load_wasm(wasm_path: &Path) -> Vec<u8> {
     })
 }
 
-/// Create canister, add cycles, install wasm with empty init args. Returns canister id.
-/// Controller is set to `controller` so that principal can call add_gateway_principal.
-pub fn deploy_canister_with_controller(
-    pic: &PocketIc,
-    wasm_bytes: Vec<u8>,
-    controller: Principal,
-) -> Principal {
-    deploy_canister_with_init_args(pic, wasm_bytes, controller, None)
-}
-
-/// Deploy with init args (including optional gateway principals).
+/// Deploy with init args (including optional cashier canister ID).
 pub fn deploy_canister_with_init_args(
     pic: &PocketIc,
     wasm_bytes: Vec<u8>,
@@ -89,9 +79,63 @@ pub fn deploy_canister_with_init_args(
     canister_id
 }
 
+/// Create canister, add cycles, install wasm with empty init args. Returns canister id.
+pub fn deploy_canister_with_controller(
+    pic: &PocketIc,
+    wasm_bytes: Vec<u8>,
+    controller: Principal,
+) -> Principal {
+    deploy_canister_with_init_args(pic, wasm_bytes, controller, None)
+}
+
 /// Deploy with anonymous as controller (convenience for tests that use anonymous).
 pub fn deploy_canister(pic: &PocketIc, wasm_bytes: Vec<u8>) -> Principal {
     deploy_canister_with_controller(pic, wasm_bytes, Principal::anonymous())
+}
+
+// =============================================================================
+// Mock Cashier
+// =============================================================================
+
+/// Deploy a mock cashier canister that returns the given principals from
+/// `storage_gateway_principal_list_v1`.
+pub fn deploy_mock_cashier(pic: &PocketIc, principals: Vec<Principal>) -> Principal {
+    let mock_wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("mock-cashier/target/wasm32-unknown-unknown/debug/mock_cashier.wasm");
+    let wasm = load_wasm(&mock_wasm_path);
+    let canister_id = pic.create_canister();
+    pic.add_cycles(canister_id, 10_000_000_000_000u128);
+    let encoded = candid::encode_one(principals).expect("encode mock cashier init");
+    pic.install_canister(canister_id, wasm, encoded, None);
+    canister_id
+}
+
+/// Deploy the example backend configured to use the given mock cashier,
+/// then call `_immutableObjectStorageUpdateGatewayPrincipals` to fetch
+/// gateway principals from the mock.
+pub fn deploy_with_mock_cashier(
+    pic: &PocketIc,
+    wasm_bytes: Vec<u8>,
+    controller: Principal,
+    gateway_principals: Vec<Principal>,
+) -> Principal {
+    let mock_cashier_id = deploy_mock_cashier(pic, gateway_principals);
+    let canister_id = deploy_canister_with_init_args(
+        pic,
+        wasm_bytes,
+        controller,
+        Some(InitArgs {
+            cashier_canister_id: Some(mock_cashier_id),
+        }),
+    );
+    pic.update_call(
+        canister_id,
+        Principal::anonymous(),
+        "_immutableObjectStorageUpdateGatewayPrincipals",
+        candid::encode_one(()).expect("encode"),
+    )
+    .expect("update gateway principals");
+    canister_id
 }
 
 // =============================================================================
@@ -171,36 +215,6 @@ pub fn confirm_blob_deletion(
         "_immutableObjectStorageConfirmBlobDeletion",
         payload,
     )
-}
-
-pub fn add_gateway_principal(
-    pic: &PocketIc,
-    canister_id: Principal,
-    principal: Principal,
-) -> Result<Vec<u8>, pocket_ic::RejectResponse> {
-    add_gateway_principal_with_sender(pic, canister_id, principal, SENDER, "add_gateway_principal")
-}
-
-/// Call add_gateway_principal with a given method name (e.g. "addGatewayPrincipal" for Motoko).
-pub fn add_gateway_principal_raw(
-    pic: &PocketIc,
-    canister_id: Principal,
-    principal: Principal,
-    method: &str,
-) -> Result<Vec<u8>, pocket_ic::RejectResponse> {
-    add_gateway_principal_with_sender(pic, canister_id, principal, SENDER, method)
-}
-
-/// Call add_gateway_principal as a specific sender (must be canister controller).
-pub fn add_gateway_principal_with_sender(
-    pic: &PocketIc,
-    canister_id: Principal,
-    principal: Principal,
-    sender: Principal,
-    method: &str,
-) -> Result<Vec<u8>, pocket_ic::RejectResponse> {
-    let payload = candid::encode_one(principal).expect("encode");
-    pic.update_call(canister_id, sender, method, payload)
 }
 
 pub fn list_blobs(pic: &PocketIc, canister_id: Principal) -> Result<Vec<BlobInfo>, pocket_ic::RejectResponse> {
