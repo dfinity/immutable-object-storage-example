@@ -8,7 +8,10 @@ type BlobInfo = record {
   created_at : nat64;
 };
 type CreateCertificateResult = record { method : text; blob_hash : text };
-service : () -> {
+type InitArgs = record {
+  gateway_principals : opt vec principal;
+};
+service : (opt InitArgs) -> {
   _immutableObjectStorageBlobIsLive : (blob) -> (bool) query;
   _immutableObjectStorageBlobsToDelete : () -> (vec text) query;
   _immutableObjectStorageConfirmBlobDeletion : (vec blob) -> ();

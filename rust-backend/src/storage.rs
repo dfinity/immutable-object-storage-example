@@ -246,12 +246,17 @@ fn create_certificate(hash: String) -> CreateCertificateResult {
 // Admin: manage gateway principals (canister controller only)
 // =============================================================================
 
+/// Register a gateway principal (used by init and add_gateway_principal).
+pub(crate) fn register_gateway_principal(principal: Principal) {
+    GATEWAY_PRINCIPALS.with(|g| g.borrow_mut().insert(principal, Empty));
+}
+
 #[update]
 fn add_gateway_principal(principal: Principal) {
     if !is_controller(&msg_caller()) {
         ic_cdk::trap("only a canister controller can call add_gateway_principal");
     }
-    GATEWAY_PRINCIPALS.with(|g| g.borrow_mut().insert(principal, Empty));
+    register_gateway_principal(principal);
 }
 
 // =============================================================================

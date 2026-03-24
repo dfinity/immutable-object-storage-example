@@ -7,6 +7,7 @@ mod storage;
 
 use std::cell::RefCell;
 
+use candid::CandidType;
 use candid::Principal;
 use ic_cdk::init;
 use ic_cdk::query;
@@ -14,6 +15,7 @@ use ic_cdk::update;
 use ic_stable_structures::memory_manager::MemoryManager;
 use ic_stable_structures::memory_manager::VirtualMemory;
 use ic_stable_structures::DefaultMemoryImpl;
+use serde::Deserialize;
 pub use storage::BlobInfo;
 pub use storage::CreateCertificateResult;
 
@@ -28,8 +30,22 @@ thread_local! {
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 }
 
+#[derive(CandidType, Deserialize, Default)]
+struct InitArgs {
+    pub gateway_principals: Option<Vec<Principal>>,
+}
+
 #[init]
-fn init() {}
+fn init(args: Option<InitArgs>) {
+    if let Some(InitArgs {
+        gateway_principals: Some(principals),
+    }) = args
+    {
+        for p in principals {
+            storage::register_gateway_principal(p);
+        }
+    }
+}
 
 // =============================================================================
 // App API (example — adapt to your needs)

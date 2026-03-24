@@ -32,7 +32,7 @@ import Set       "mo:core/Set";
 import Text      "mo:core/Text";
 import Time      "mo:core/Time";
 
-persistent actor ExampleBackend {
+persistent actor class ExampleBackend(initArgs : ?{ gateway_principals : ?[Principal] }) {
 
     // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +55,19 @@ persistent actor ExampleBackend {
     stable let liveBlobs = Map.empty<Text, BlobInfo>();
     stable let pendingDelete = Set.empty<Text>();
     stable let gatewayPrincipals = Set.empty<Principal>();
+
+    // ── Init: register gateway principals if provided ─────────────────────────
+
+    do {
+        switch (initArgs) {
+            case (?{ gateway_principals = ?principals }) {
+                for (p in principals.values()) {
+                    Set.add(gatewayPrincipals, Principal.compare, p);
+                };
+            };
+            case _ {};
+        };
+    };
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 

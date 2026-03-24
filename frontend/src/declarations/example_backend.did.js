@@ -33,4 +33,9 @@ export const idlFactory = ({ IDL }) => {
   });
 };
 
-export const init = ({ IDL }) => [];
+export const init = ({ IDL }) => {
+  const InitArgs = IDL.Record({
+    gateway_principals: IDL.Opt(IDL.Vec(IDL.Principal)),
+  });
+  return [IDL.Opt(InitArgs)];
+};

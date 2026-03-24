@@ -45,6 +45,11 @@ pub struct CreateCertificateResult {
     pub blob_hash: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, CandidType)]
+pub struct InitArgs {
+    pub gateway_principals: Option<Vec<Principal>>,
+}
+
 // =============================================================================
 // Deploy
 // =============================================================================
@@ -67,10 +72,20 @@ pub fn deploy_canister_with_controller(
     wasm_bytes: Vec<u8>,
     controller: Principal,
 ) -> Principal {
+    deploy_canister_with_init_args(pic, wasm_bytes, controller, None)
+}
+
+/// Deploy with init args (including optional gateway principals).
+pub fn deploy_canister_with_init_args(
+    pic: &PocketIc,
+    wasm_bytes: Vec<u8>,
+    controller: Principal,
+    init_args: Option<InitArgs>,
+) -> Principal {
     let canister_id = pic.create_canister_with_settings(Some(controller), None);
     pic.add_cycles(canister_id, 10_000_000_000_000u128); // 10T
-    let init_args = candid::encode_one(()).expect("encode init");
-    pic.install_canister(canister_id, wasm_bytes, init_args, Some(controller));
+    let encoded = candid::encode_one(init_args).expect("encode init");
+    pic.install_canister(canister_id, wasm_bytes, encoded, Some(controller));
     canister_id
 }
 

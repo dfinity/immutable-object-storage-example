@@ -8,7 +8,8 @@ use pocket_ic::PocketIc;
 use crate::{
     add_gateway_principal_with_sender, blob_is_live, blobs_to_delete_with_sender,
     confirm_blob_deletion, create_certificate, delete_blob, deploy_canister,
-    deploy_canister_with_controller, hash_string_to_32_bytes, list_blobs, load_wasm, set_blob_info,
+    deploy_canister_with_controller, deploy_canister_with_init_args, hash_string_to_32_bytes,
+    list_blobs, load_wasm, set_blob_info, InitArgs,
 };
 
 fn rust_wasm_path() -> PathBuf {
@@ -165,6 +166,28 @@ fn test_list_blobs_and_set_blob_info() {
     assert_eq!(blobs[0].name, "myfile.txt");
     assert_eq!(blobs[0].size, 1234);
     assert_eq!(blobs[0].content_type, "text/plain");
+}
+
+#[test]
+fn test_init_with_gateway_principals() {
+    let pic = PocketIc::new();
+    let wasm = load_wasm(&rust_wasm_path());
+    let gateway = Principal::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").unwrap();
+    let canister_id = deploy_canister_with_init_args(
+        &pic,
+        wasm,
+        gateway,
+        Some(InitArgs {
+            gateway_principals: Some(vec![gateway]),
+        }),
+    );
+
+    let hash = "sha256:".to_string() + &"1".repeat(64);
+    create_certificate(&pic, canister_id, &hash).expect("create_certificate");
+    delete_blob(&pic, canister_id, &hash).expect("delete_blob");
+
+    let list = blobs_to_delete_with_sender(&pic, canister_id, gateway).expect("blobs_to_delete");
+    assert_eq!(list, vec![hash]);
 }
 
 #[test]
