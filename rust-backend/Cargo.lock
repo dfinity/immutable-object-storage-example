@@ -69,9 +69,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "candid"
-version = "0.10.24"
+version = "0.10.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "601b519700ec333a2a2c7eb3e8e1eca89177055e3e1fb24ca42cbbb025986696"
+checksum = "846adba6d1b4a00eeb8d4a0e4b88dfab570c25ad150cd52e51dfdc4f9d0a66cd"
 dependencies = [
  "anyhow",
  "binread",
@@ -92,9 +92,9 @@ dependencies = [
 
 [[package]]
 name = "candid_derive"
-version = "0.10.24"
+version = "0.10.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f195a40cd3d199191fc8b534165fadd78c08a1f9666222addaf9f58593002a73"
+checksum = "4c367110b158be2edc335a4ad70f3467fa588d5c5675e149ef38638a8e281fc4"
 dependencies = [
  "lazy_static",
  "proc-macro2",
@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.56"
+version = "1.2.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aebf35691d1bfb0ac386a69bac2fde4dd276fb618cf8bf4f5318fe285e821bb2"
+checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -340,9 +340,9 @@ checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "memchr"
@@ -432,9 +432,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.44"
+version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
+checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
