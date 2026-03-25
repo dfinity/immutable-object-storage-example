@@ -12,7 +12,7 @@
  * See README.md "Upload Protocol" for the specification.
  */
 
-import { type HttpAgent, isV3ResponseBody } from "@icp-sdk/core/agent";
+import { type HttpAgent, isV4ResponseBody } from "@icp-sdk/core/agent";
 import { IDL } from "@icp-sdk/core/candid";
 
 // ---------------------------------------------------------------------------
@@ -462,7 +462,7 @@ export class StorageClient {
     contentType = "application/octet-stream",
     onProgress?: (percentage: number) => void,
   ): Promise<{ hash: string }> {
-    const file = new Blob([fileBytes], { type: contentType });
+    const file = new Blob([new Uint8Array(fileBytes)], { type: contentType });
 
     const fileHeaders: MetadataHeaders = {
       "Content-Type": contentType,
@@ -517,10 +517,10 @@ export class StorageClient {
       arg: args,
     });
     const body = result.response.body;
-    if (isV3ResponseBody(body)) {
+    if (isV4ResponseBody(body)) {
       return body.certificate;
     }
-    throw new Error("Expected v3 response body with certificate");
+    throw new Error("Expected v4 response body with certificate");
   }
 
   private async processFileForUpload(
