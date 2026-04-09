@@ -207,14 +207,14 @@ an **update call**. This does two things:
 
 The important part is **not** the return value — it's the **IC response certificate**
 attached to the update call response. This certificate proves that the canister authorized
-the upload. Extract it from the V3 response body:
+the upload. Extract it from the response body:
 
 ```typescript
 const result = await agent.call(canisterId, {
   methodName: '_immutableObjectStorageCreateCertificate',
   arg: IDL.encode([IDL.Text], [rootHash]),
 });
-if (isV3ResponseBody(result.response.body)) {
+if (isV4ResponseBody(result.response.body)) {
   const certificateBytes = result.response.body.certificate;
   // Use certificateBytes in the next step
 }
@@ -252,6 +252,20 @@ The gateway verifies that:
 - The certified response contains `method: "upload"` and the matching `blob_hash`
 - The canister has sufficient budget (checked against the Cashier)
 
+Response:
+```json
+{
+  "status": "blob_tree_accepted",
+  "existing_chunks": ["sha256:aabb...", "sha256:ccdd..."],
+  "chunk_check_errors": 0
+}
+```
+
+The `existing_chunks` array lists chunk hashes that the gateway already has stored.
+Skip uploading any chunks whose hashes appear in this list. If `chunk_check_errors`
+is non-zero, some checks failed and those chunks should be re-uploaded (safe default).
+If the response cannot be parsed (e.g. older gateway), fall back to uploading all chunks.
+
 ### Step 4: Upload each chunk
 
 ```
@@ -261,7 +275,8 @@ Body: <raw chunk bytes>
 ```
 
 Chunks can be uploaded in parallel (the example uses up to 10 concurrent uploads).
-When the last chunk is received, the gateway responds with `{ "status": "blob_complete" }`.
+If a chunk already exists, the gateway returns `{ "status": "chunk_already_exists" }`
+without re-storing it.
 
 ### Downloading a file
 
