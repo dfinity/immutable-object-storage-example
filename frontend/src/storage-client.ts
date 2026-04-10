@@ -376,7 +376,7 @@ class StorageGatewayClient {
     owner: string,
     projectId: string,
     certificateBytes: Uint8Array,
-  ): Promise<void> {
+  ): Promise<{ existingChunks: Set<string> }> {
     const treeJSON = blobHashTree.toJSON();
     validateHashFormat(treeJSON.tree.hash, "uploadBlobTree root hash");
     treeJSON.chunk_hashes.forEach((hash, index) => {
@@ -415,6 +415,23 @@ class StorageGatewayClient {
           status: response.status,
         };
         throw error;
+      }
+
+      // Parse existing chunks from the response to skip redundant uploads.
+      // On parse failure, return empty set so upload proceeds without dedup.
+      try {
+        const result = (await response.json()) as {
+          existing_chunks?: string[];
+          chunk_check_errors?: number;
+        };
+        if (result.chunk_check_errors && result.chunk_check_errors > 0) {
+          console.warn(
+            `Chunk existence check had ${result.chunk_check_errors} errors; some chunks may be re-uploaded`,
+          );
+        }
+        return { existingChunks: new Set(result.existing_chunks ?? []) };
+      } catch {
+        return { existingChunks: new Set() };
       }
     });
   }
@@ -478,7 +495,7 @@ export class StorageClient {
 
     const certificateBytes = await this.getCertificate(hashString);
 
-    await this.gatewayClient.uploadBlobTree(
+    const { existingChunks } = await this.gatewayClient.uploadBlobTree(
       blobHashTree,
       this.bucketName,
       file.size,
@@ -487,7 +504,7 @@ export class StorageClient {
       certificateBytes,
     );
 
-    await this.parallelUpload(chunks, chunkHashes, blobRootHash, onProgress);
+    await this.parallelUpload(chunks, chunkHashes, blobRootHash, existingChunks, onProgress);
 
     return { hash: hashString };
   }
@@ -546,9 +563,22 @@ export class StorageClient {
     chunks: Blob[],
     chunkHashes: YHash[],
     blobRootHash: YHash,
+    existingChunks: Set<string>,
     onProgress: ((percentage: number) => void) | undefined,
   ): Promise<void> {
-    let completedChunks = 0;
+    // Build list of chunk indices that need uploading (skip already-existing)
+    const indicesToUpload: number[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      if (!existingChunks.has(chunkHashes[i].toShaString())) {
+        indicesToUpload.push(i);
+      }
+    }
+
+    let completedChunks = chunks.length - indicesToUpload.length;
+
+    if (onProgress != null && completedChunks > 0) {
+      onProgress(Math.round((completedChunks / chunks.length) * 100));
+    }
 
     const uploadSingleChunk = async (index: number): Promise<void> => {
       const chunkData = new Uint8Array(await chunks[index].arrayBuffer());
@@ -571,8 +601,8 @@ export class StorageClient {
 
     await Promise.all(
       Array.from({ length: MAXIMUM_CONCURRENT_UPLOADS }, async (_, workerId) => {
-        for (let i = workerId; i < chunks.length; i += MAXIMUM_CONCURRENT_UPLOADS) {
-          await uploadSingleChunk(i);
+        for (let i = workerId; i < indicesToUpload.length; i += MAXIMUM_CONCURRENT_UPLOADS) {
+          await uploadSingleChunk(indicesToUpload[i]);
         }
       }),
     );
